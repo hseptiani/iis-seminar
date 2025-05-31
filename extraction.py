@@ -1,9 +1,17 @@
+import os
+import pickle
 import re
 import csv
+import time
+import pandas as pd
+
 
 def parse_handle_request(content):
     m = re.match(r'(START HANDLE REQUEST): (\w+) params: \[(.*?)\]', content)
     result = {}
+    if m is None:
+        m = re.match(r'(END HANDLE REQUEST): (\w+) params: \[(.*?)\] result: (-?\d+) response time: (\w+)', content)
+
     if m:
         result['stage'] = m[1]
         result['request'] = m[2]
@@ -13,22 +21,13 @@ def parse_handle_request(content):
         result['force_check'] = 'null'
         if len(params) > 2:
             result['force_check'] = params[2]
-    else:
-        m = re.match(r'(END HANDLE REQUEST): (\w+) params: \[(.*?)\] result: (-?\d+) response time: (\w+)', content)
-        if m:
-            result['stage'] = m[1]
-            result['request'] = m[2]
-            params = m[3].split(', ')
-            result['area'] = params[0]
-            result['le'] = params[1]
-            result['force_check'] = 'null'
-            if len(params) > 2:
-                result['force_check'] = params[2]
+
+        if result['stage'] == "END HANDLE REQUEST":
             result['result'] = m[4]
             result['response_time'] = m[5]
-        else:
-            result['stage'] = 'unknown'
-            result['data'] = content
+    else:
+        result['stage'] = 'unknown'
+        result['data'] = content
 
     return result
 
@@ -70,6 +69,9 @@ def parse_execute_rbg(content):
                         result['le'] = m[1]
                     else:
                         result['le'] += ', ' + m[1]
+    else:
+        result['stage'] = 'unknown'
+        result['data'] = content
 
     return result
 
@@ -149,23 +151,20 @@ def parse_path_movement(content):
 
 
 def write_request(data, function_name):
-    filename = 'result/' + function_name + '.csv'
-    with open(filename, mode='w', newline='') as file:
-        writer = csv.DictWriter(file, fieldnames=data[0].keys())
-        writer.writeheader()
-        writer.writerows(data)
+    # filename = 'result/' + function_name + '.csv'
+    # with open(filename, mode='w', newline='') as file:
+    #     writer = csv.DictWriter(file, fieldnames=data[0].keys())
+    #     writer.writeheader()
+    #     writer.writerows(data)
+
+    filename = 'result/' + function_name + '.pkl'
+    df = pd.DataFrame(data)  # Convert list of dicts to DataFrame
+    df.to_pickle(filename)
 
 
 if __name__ == '__main__':
-    original_raw_file = 'RawDataSigment1'
-    file_path = 'rawdata/' + original_raw_file + '.log'
+    start_time = time.time() # Start timing
 
-    # with gzip.open(file_path, 'rt', encoding='utf-8') as f:
-    # lines = [line.strip() for line in f if line.strip()]
-    with open(file_path) as f:
-        lines = f.readlines()
-
-    timestamp_pattern = re.compile(r'^\[(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (\w) (\w+) (\w+) ([^\]]+)\]\s*(.*)$')
     start_handle_req = []
     end_handle_req = []
     execute_rbg = []
@@ -174,49 +173,68 @@ if __name__ == '__main__':
     path_movement_failed = []
     unknown_content = []
 
-    a = 0
-    for line in lines:
-        ts_match = timestamp_pattern.match(line)
-        if ts_match:
-            timestamp, log_level, module, worker_id, function, content = ts_match.groups()
-            function_name = function.split(".")[len(function.split("."))-1]
-            parsed = {'timestamp': timestamp, 'module': module, 'worker_id': worker_id}
+    folder = "rawdata"
+    for file in os.listdir(folder):
+        if file.endswith('.log'):
+            file_path = os.path.join(folder, file)
+            with open(file_path) as f:
+                lines = f.readlines()
 
-            try:
-                if function_name == 'executeRbg':
-                    parsed.update(parse_execute_rbg(content))
-                    execute_rbg.append(parsed)
-                elif function_name == 'handleRequest':
-                    parsed.update(parse_handle_request(content))
+            timestamp_pattern = re.compile(r'^\[(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (\w) (\w+) (\w+) ([^\]]+)\]\s*(.*)$')
+            rbg_stage = ''
 
-                    if parsed['stage'] == 'START HANDLE REQUEST':
-                        start_handle_req.append(parsed)
-                    elif parsed['stage'] == 'END HANDLE REQUEST':
-                        end_handle_req.append(parsed)
-                    else:
-                        unknown_content.append(parsed)
-                elif function_name == 'isVBOK':
-                    parsed.update(parse_vb(content))
+            for line in lines:
+                ts_match = timestamp_pattern.match(line)
+                if ts_match:
+                    timestamp, log_level, module, worker_id, function, content = ts_match.groups()
+                    function_name = function.split(".")[len(function.split("."))-1]
 
-                    if parsed['id']:
-                        is_vb_ok.append(parsed)
-                    else:
-                        unknown_content.append(parsed)
-                elif function_name == 'getPathForMovement':
-                    parsed.update(parse_path_movement(content))
-                    if parsed['search_status'] == 'finished':
-                        path_movement_finished.append(parsed)
-                    else:
-                        path_movement_failed.append(parsed)
-                else:
-                    u = {'stage': function_name, 'data': content}
-                    parsed.update(u)
-                    unknown_content.append(parsed)
+                    # Start every dict with timestamp, module and worker id
+                    parsed = {'timestamp': timestamp, 'module': module, 'worker_id': worker_id}
 
-            except Exception as e:
-                print(function_name, timestamp)
-                exit(1)
+                    # For every function, update the parsed dict with the return
+                    # and append the respective list
+                    try:
+                        if function_name == 'executeRbg':
+                            parsed.update(parse_execute_rbg(content))
+                            if parsed['stage'] == 'unknown':
+                                rbg_stage = content
+                            else:
+                                if parsed['stage'] == '':
+                                    parsed['stage'] = rbg_stage
+                                execute_rbg.append(parsed)
+                        elif function_name == 'handleRequest':
+                            parsed.update(parse_handle_request(content))
 
+                            if parsed['stage'] == 'START HANDLE REQUEST':
+                                start_handle_req.append(parsed)
+                            elif parsed['stage'] == 'END HANDLE REQUEST':
+                                end_handle_req.append(parsed)
+                            else:
+                                unknown_content.append(parsed)
+                        elif function_name == 'isVBOK':
+                            parsed.update(parse_vb(content))
+
+                            if parsed['id']:
+                                is_vb_ok.append(parsed)
+                            else:
+                                unknown_content.append(parsed)
+                        elif function_name == 'getPathForMovement':
+                            parsed.update(parse_path_movement(content))
+                            if parsed['search_status'] == 'finished':
+                                path_movement_finished.append(parsed)
+                            else:
+                                path_movement_failed.append(parsed)
+                        else:
+                            u = {'stage': function_name, 'data': content}
+                            parsed.update(u)
+                            unknown_content.append(parsed)
+
+                    except Exception as e:
+                        print(function_name, timestamp)
+                        exit(1)
+
+    # Write the list into pkl file
     write_request(execute_rbg, 'Execute RBG')
     write_request(start_handle_req, 'Start Handle Request')
     write_request(end_handle_req, 'End Handle Request')
@@ -224,3 +242,6 @@ if __name__ == '__main__':
     write_request(path_movement_finished, 'Path Movement Finished')
     write_request(path_movement_failed, 'Path Movement Failed')
     write_request(unknown_content, 'Unknown Content')
+
+    end_time = time.time()  # End timing here
+    print("Execution time:", end_time - start_time, "seconds")
