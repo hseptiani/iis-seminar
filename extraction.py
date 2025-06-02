@@ -149,6 +149,104 @@ def parse_path_movement(content):
 
     return result
 
+def parse_alert(content):
+    """
+    Parses three kinds of alert-related lines:
+      1) 'Alert empfangen: Name=..., Text=...'
+      2) 'Start Alert-Verarbeitung: Alert=...,Lfdnr=...,Text=...'
+      3) 'Alert <NAME> wurde verarbeitet. Text: '...' time: <n>[ms]'
+    Returns a dict with at least 'stage', plus specific fields depending on which pattern matched.
+    """
+    result = {
+        'stage': '',
+        'alert_name': None,
+        'lfdnr': None,
+        'text': None,
+        'time_ms': None
+    }
+
+    # 1) Alert empfangen
+    m1 = re.match(r'\s*Alert empfangen:\s*Name=([^ ]+)\s*Text=(.*)', content)
+    if m1:
+        result['stage'] = 'Alert empfangen'
+        result['alert_name'] = m1.group(1)
+        result['text'] = m1.group(2).strip()
+        return result
+
+    # 2) Start Alert-Verarbeitung
+    m2 = re.match(
+        r'Start Alert-Verarbeitung: Alert=([^,]+),Lfdnr=(\d+),Text=(.*)',
+        content
+    )
+    if m2:
+        result['stage'] = 'Start Alert-Verarbeitung'
+        result['alert_name'] = m2.group(1)
+        result['lfdnr'] = m2.group(2)
+        result['text'] = m2.group(3).strip()
+        return result
+
+    # 3) Alert <NAME> wurde verarbeitet
+    m3 = re.match(
+        r"Alert ([^ ]+) wurde verarbeitet\. Text: '(.*)' time: (\d+)\[ms\]",
+        content
+    )
+    if m3:
+        name = m3.group(1)
+        result['stage'] = f'Alert {name} wurde verarbeitet'
+        result['alert_name'] = name
+        result['text'] = m3.group(2).strip()
+        result['time_ms'] = m3.group(3)
+        return result
+
+    # fallback
+    result['stage'] = 'unknown'
+    result['data'] = content
+    return result
+
+
+def parse_telegram(content):
+    """
+    Parses two kinds of telegram-related lines:
+      1) 'TelegramDispatch processed - success: <bool>, alert: <NAME>, text: <...>, telStructure: <...>'
+      2) 'Alert <NAME> wurde gesendet. Text: '...''
+    Returns a dict with at least 'stage', plus specific fields for whichever pattern matched.
+    """
+    result = {
+        'stage': '',
+        'success': None,
+        'alert_name': None,
+        'text': None,
+        'tel_structure': None
+    }
+
+    # 1) TelegramDispatch processed
+    m1 = re.match(
+        r'TelegramDispatch processed - success: (\w+), alert: ([^,]+), '
+        r'text: (.*), telStructure: (.+)',
+        content
+    )
+    if m1:
+        result['stage'] = 'TelegramDispatch processed'
+        result['success'] = m1.group(1)
+        result['alert_name'] = m1.group(2)
+        result['text'] = m1.group(3).strip()
+        result['tel_structure'] = m1.group(4)
+        return result
+
+    # 2) Alert <NAME> wurde gesendet
+    m2 = re.match(r"Alert ([^ ]+) wurde gesendet\. Text: '(.+)'", content)
+    if m2:
+        name = m2.group(1)
+        result['stage'] = f'Alert {name} wurde gesendet'
+        result['alert_name'] = name
+        result['text'] = m2.group(2)
+        return result
+
+    # fallback
+    result['stage'] = 'unknown'
+    result['data'] = content
+    return result
+
 
 def write_request(data, function_name):
     # filename = 'result/' + function_name + '.csv'
@@ -172,6 +270,13 @@ if __name__ == '__main__':
     path_movement_finished = []
     path_movement_failed = []
     unknown_content = []
+    alerts_received = []
+    alerts_processing = []
+    alerts_handled = []
+    alerts_unknown = []
+    telegrams_processed = []
+    telegrams_sent = []
+    telegrams_unknown = []
 
     folder = "rawdata"
     for file in os.listdir(folder):
@@ -180,7 +285,8 @@ if __name__ == '__main__':
             with open(file_path) as f:
                 lines = f.readlines()
 
-            timestamp_pattern = re.compile(r'^\[(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (\w) (\w+) (\w+) ([^\]]+)\]\s*(.*)$')
+            # timestamp_pattern = re.compile(r'^\[(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (\w) (\w+) (\w+) ([^\]]+)\]\s*(.*)$')
+            timestamp_pattern = re.compile(r'^\[(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (\w) ([^\s\]]+) ([^\s\]]+) ([^\]]+)\]\s*(.*)$') #it also captures '-'
             rbg_stage = ''
 
             for line in lines:
@@ -225,13 +331,52 @@ if __name__ == '__main__':
                                 path_movement_finished.append(parsed)
                             else:
                                 path_movement_failed.append(parsed)
+                        elif function_name == 'mainLoop':
+                            parsed.update(parse_alert(content))
+                            if parsed['stage'] == 'Alert empfangen':
+                                alerts_received.append(parsed)
+                            else:
+                                unknown_content.append(parsed)
+
+                        elif function_name == 'processAlert':
+                            parsed.update(parse_alert(content))
+                            if parsed['stage'] == 'Start Alert-Verarbeitung':
+                                alerts_processing.append(parsed)
+                            else:
+                                unknown_content.append(parsed)
+
+                        elif function_name == 'alertHandler()':
+                            parsed.update(parse_alert(content))
+                            # matches "Alert <NAME> wurde verarbeitet"
+                            if parsed['stage'].startswith('Alert') and 'wurde verarbeitet' in parsed['stage']:
+                                alerts_handled.append(parsed)
+                            else:
+                                unknown_content.append(parsed)
+
+                        # --- TELEGRAM HANDLING ---
+                        elif function_name == 'fmRbgTelDisp':
+                            parsed.update(parse_telegram(content))
+                            if parsed['stage'] == 'TelegramDispatch processed':
+                                telegrams_processed.append(parsed)
+                            else:
+                                unknown_content.append(parsed)
+
+                        elif function_name == 'send':
+                            parsed.update(parse_telegram(content))
+                            # matches "Alert <NAME> wurde gesendet"
+                            if parsed['stage'].startswith('Alert') and 'wurde gesendet' in parsed['stage']:
+                                telegrams_sent.append(parsed)
+                            else:
+                                unknown_content.append(parsed)
+
                         else:
-                            u = {'stage': function_name, 'data': content}
-                            parsed.update(u)
+                            # anything else
+                            parsed.update({'stage': function_name, 'data': content})
                             unknown_content.append(parsed)
 
+
                     except Exception as e:
-                        print(function_name, timestamp)
+                        print(f"Error parsing function '{function_name}' at {timestamp}: {e}")
                         exit(1)
 
     # Write the list into pkl file
@@ -242,6 +387,11 @@ if __name__ == '__main__':
     write_request(path_movement_finished, 'Path Movement Finished')
     write_request(path_movement_failed, 'Path Movement Failed')
     write_request(unknown_content, 'Unknown Content')
+    write_request(alerts_received, 'Alerts Received')
+    write_request(alerts_processing, 'Alerts Processing')
+    write_request(alerts_handled, 'Alerts Handled')
+    write_request(telegrams_processed, 'Telegrams Processed')
+    write_request(telegrams_sent, 'Telegrams Sent')
 
     end_time = time.time()  # End timing here
     print("Execution time:", end_time - start_time, "seconds")
