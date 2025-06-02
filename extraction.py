@@ -7,6 +7,13 @@ import pandas as pd
 
 
 def parse_handle_request(content):
+    '''
+    Sample content:
+    START HANDLE REQUEST: CHECK_SEQ params: [MF1, 1847608]
+    START HANDLE REQUEST: CHECK_SEQ params: [MF2, 1847529, true]
+    END HANDLE REQUEST: CHECK_SEQ params: [MF1, 1847608] result: 0 response time: 0ms
+    END HANDLE REQUEST: CHECK_SEQ params: [MF2, 1847529, true] result: 1 response time: 0ms
+    '''
     m = re.match(r'(START HANDLE REQUEST): (\w+) params: \[(.*?)\]', content)
     result = {}
     if m is None:
@@ -32,6 +39,12 @@ def parse_handle_request(content):
     return result
 
 def parse_execute_rbg(content):
+    '''
+    Sample content:
+    try execute Task: TASK_ID: 199, TASK_TYPE: SingleTask CATEGORY: ON_TIME LOCKED: false POINTS: 1363 TELEGRAM_TYPE: FS LAM: 1 INFO: SingleTask - LAM(s)={1} LE: 1847529
+    TASK_ID: 242, TASK_TYPE: LamTask CATEGORY: ON_TIME LOCKED: false POINTS: 807 TELEGRAM_TYPE: FS LAM: 1 INFO: LamTask - LAM(s)={1} SUBTASKS=[, SingleTask - LAM(s)={1} LE: 1847667, SingleTask - LAM(s)={1} LE: 1847668]
+    TASK_ID: 240, TASK_TYPE: LamTask CATEGORY: ON_TIME LOCKED: true POINTS: 907 TELEGRAM_TYPE: FS LAM: 1 INFO: LamTask - LAM(s)={1} SUBTASKS=[, SingleTask - LAM(s)={1} LE: 1847717, SingleTask - LAM(s)={1} LE: 1847718] -- FAILURE: LamTask not allowed for UML transports. current LHM 1847717 [a_typ=UML] -- FAILURE: LamTask not allowed for UML transports. current LHM 1847717 [a_typ=UML]
+    '''
     pattern = re.compile(r'(.*?)TASK_ID: (\d+), TASK_TYPE: (\w+) CATEGORY: (\w+) LOCKED: (\w+) POINTS: (\d+) TELEGRAM_TYPE: (\w+) LAM: (\d+) INFO: (.+?) SUBTASKS=\[, (.*?)\]')
     match = pattern.match(content)
     result = {}
@@ -77,6 +90,11 @@ def parse_execute_rbg(content):
 
 
 def parse_vb(content):
+    '''
+    Sample content:
+    id=1847583: VB not OK; result=false; info: #reserved=4, #VBOK=4
+    id=1847754: VB not OK; result=false; info: isMoving=true, status=2, requiredStatusBit=4
+    '''
     pattern = re.compile(r'id=(\d+): VB ([^;]+); result=(\w+); info: (.+)')
     match = pattern.match(content)
     result = {}
@@ -109,6 +127,12 @@ def parse_vb(content):
 
 
 def parse_path_movement(content):
+    '''
+    Sample content:
+    path search finished -- mfsId: 1847734; [true, [[[ 104008 -> 104100 ], [ 104100 -> 1410 ], [ 1410 -> 1418 ], [ 1418 -> 1715 ], [ 1715 -> 1716 ]]], 0]
+    path search finished -- mfsId: 1847599; [false, [], -2]
+    path search failed -- mfsTrans: [ mfs=1, mfs-id=1847599, 1631 -> 1716, checkLocal=63, checkRemote=8, distType=0, saveWay=true, minDist=0 ] failcode: -2
+    '''
     main_pattern = re.compile(r'path search (finished) -- mfsId: (\d+); \[(\w+), (\[\[\[.*?\]\]\]|\[\]), (-?\d+)\]')
     match = main_pattern.match(content)
     result = {}
@@ -248,6 +272,59 @@ def parse_telegram(content):
     return result
 
 
+def check_sequence(content):
+    pattern = re.compile(r'sequence check (\w+). id=(\d+) is (\w+). returned=(\d+)')
+    match = pattern.match(content)
+    result = {}
+
+    if match:
+        sequence_status, id, id_status, returned = match.groups()
+        result['sequence_status'] = sequence_status
+        result['id'] = id
+        result['id_status'] = id_status
+        result['returned'] = returned
+
+    return result
+
+
+def check_position(content):
+    pattern = re.compile(r'CHECK_POSITION: LE id=(\d+) on position=(\d+), (seq=[^\s]+)')
+    match = pattern.match(content)
+    result = {}
+    id = position = status = ''
+
+    if match:
+        id, position, status = match.groups()
+    else:
+        pattern = re.compile(r'LE id=(\d+): position=(\d+) is (.*)')
+        match = pattern.match(content)
+
+        if match:
+            id, position, status = match.groups()
+
+    result['id'] = id
+    result['position'] = position
+    result['status'] = status
+
+    return result
+
+
+def parse_path_detail(timestamp, mfs_id, paths):
+    result = []
+    order = 1
+    for path in paths:
+        new_path = {
+            'timestamp': timestamp,
+            'mfs_id': mfs_id,
+            'order': order,
+            'from': path['from'],
+            'to': path['to']
+        }
+        result.append(new_path)
+        order += 1
+
+    return result
+
 def write_request(data, function_name):
     # filename = 'result/' + function_name + '.csv'
     # with open(filename, mode='w', newline='') as file:
@@ -268,8 +345,11 @@ if __name__ == '__main__':
     execute_rbg = []
     is_vb_ok = []
     path_movement_finished = []
+    path_detail = []
     path_movement_failed = []
     unknown_content = []
+    sequence = []
+    position = []
     alerts_received = []
     alerts_processing = []
     alerts_handled = []
@@ -328,9 +408,16 @@ if __name__ == '__main__':
                         elif function_name == 'getPathForMovement':
                             parsed.update(parse_path_movement(content))
                             if parsed['search_status'] == 'finished':
+                                path_detail.extend(parse_path_detail(parsed['timestamp'], parsed['mfs_id'], parsed['paths']))
                                 path_movement_finished.append(parsed)
                             else:
                                 path_movement_failed.append(parsed)
+                        elif function_name == 'checkSequence':
+                            parsed.update(check_sequence(content))
+                            sequence.append(parsed)
+                        elif function_name == 'isPositionOK':
+                            parsed.update(check_position(content))
+                            position.append(parsed)
                         elif function_name == 'mainLoop':
                             parsed.update(parse_alert(content))
                             if parsed['stage'] == 'Alert empfangen':
@@ -385,6 +472,7 @@ if __name__ == '__main__':
     write_request(end_handle_req, 'End Handle Request')
     write_request(is_vb_ok, 'IsVBOK')
     write_request(path_movement_finished, 'Path Movement Finished')
+    write_request(path_detail, 'Path Movement Finished - Detail')
     write_request(path_movement_failed, 'Path Movement Failed')
     write_request(unknown_content, 'Unknown Content')
     write_request(alerts_received, 'Alerts Received')
@@ -392,6 +480,8 @@ if __name__ == '__main__':
     write_request(alerts_handled, 'Alerts Handled')
     write_request(telegrams_processed, 'Telegrams Processed')
     write_request(telegrams_sent, 'Telegrams Sent')
+    write_request(sequence, 'Check Sequence')
+    write_request(position, 'Check Position')
 
     end_time = time.time()  # End timing here
     print("Execution time:", end_time - start_time, "seconds")
