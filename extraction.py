@@ -32,21 +32,21 @@ def parse_handle_request(content):
     return result
 
 def parse_execute_rbg(content):
-    pattern = re.compile(r'(.*?)TASK_ID: (\d+), TASK_TYPE: (\w+) CATEGORY: (\w+) LOCKED: (\w+) POINTS: (\d+) TELEGRAM_TYPE: (\w+) LAM: (\d+) INFO: (.+?) SUBTASKS=\[, (.*?)\]')
+    pattern = re.compile(r'(.*?)TASK_ID: (\d+), TASK_TYPE: (\w+) CATEGORY: (\w+) LOCKED: (\w+) POINTS: (\d+) TELEGRAM_TYPE: (\w+) LAM: (\d+) INFO: (.+?) SUBTASKS=\[, (.*?)\](.*)')
     match = pattern.match(content)
     result = {}
-    stage = task_id = task_type = category = locked = points = telegram_type = lam = info = le = ''
+    stage = task_id = task_type = category = locked = points = telegram_type = lam = info = le = fail_status = ''
     les = []
 
     if match:
-        stage, task_id, task_type, category, locked, points, telegram_type, lam, info, les = match.groups()
+        stage, task_id, task_type, category, locked, points, telegram_type, lam, info, les, fail_status = match.groups()
         les = les.split(', ')
     else:
-        pattern = re.compile(r'(.*?)TASK_ID: (\d+), TASK_TYPE: (\w+) CATEGORY: (\w+) LOCKED: (\w+) POINTS: (\d+) TELEGRAM_TYPE: (\w+) LAM: (\d+) INFO: (.+?) LE: (\d+)')
+        pattern = re.compile(r'(.*?)TASK_ID: (\d+), TASK_TYPE: (\w+) CATEGORY: (\w+) LOCKED: (\w+) POINTS: (\d+) TELEGRAM_TYPE: (\w+) LAM: (\d+) INFO: (.+?) LE: (\d+)(.*)')
         match = pattern.match(content)
 
         if match:
-            stage, task_id, task_type, category, locked, points, telegram_type, lam, info, le = match.groups()
+            stage, task_id, task_type, category, locked, points, telegram_type, lam, info, le, fail_status = match.groups()
 
     if match:
         result['stage'] = stage
@@ -69,6 +69,7 @@ def parse_execute_rbg(content):
                         result['le'] = m[1]
                     else:
                         result['le'] += ', ' + m[1]
+        result['fail_status'] = fail_status
     else:
         result['stage'] = 'unknown'
         result['data'] = content
@@ -150,6 +151,42 @@ def parse_path_movement(content):
     return result
 
 
+def check_sequence(content):
+    pattern = re.compile(r'sequence check (\w+). id=(\d+) is (\w+). returned=(\d+)')
+    match = pattern.match(content)
+    result = {}
+
+    if match:
+        sequence_status, id, id_status, returned = match.groups()
+        result['sequence_status'] = sequence_status
+        result['id'] = id
+        result['id_status'] = id_status
+        result['returned'] = returned
+
+    return result
+
+
+def check_position(content):
+    pattern = re.compile(r'CHECK_POSITION: LE id=(\d+) on position=(\d+), (seq=[^\s]+)')
+    match = pattern.match(content)
+    result = {}
+    id = position = status = ''
+
+    if match:
+        id, position, status = match.groups()
+    else:
+        pattern = re.compile(r'LE id=(\d+): position=(\d+) is (.*)')
+        match = pattern.match(content)
+
+        if match:
+            id, position, status = match.groups()
+
+    result['id'] = id
+    result['position'] = position
+    result['status'] = status
+
+    return result
+
 def write_request(data, function_name):
     # filename = 'result/' + function_name + '.csv'
     # with open(filename, mode='w', newline='') as file:
@@ -171,6 +208,8 @@ if __name__ == '__main__':
     is_vb_ok = []
     path_movement_finished = []
     path_movement_failed = []
+    sequence = []
+    position = []
     unknown_content = []
 
     folder = "rawdata"
@@ -225,6 +264,12 @@ if __name__ == '__main__':
                                 path_movement_finished.append(parsed)
                             else:
                                 path_movement_failed.append(parsed)
+                        elif function_name == 'checkSequence':
+                            parsed.update(check_sequence(content))
+                            sequence.append(parsed)
+                        elif function_name == 'isPositionOK':
+                            parsed.update(check_position(content))
+                            position.append(parsed)
                         else:
                             u = {'stage': function_name, 'data': content}
                             parsed.update(u)
@@ -241,6 +286,8 @@ if __name__ == '__main__':
     write_request(is_vb_ok, 'IsVBOK')
     write_request(path_movement_finished, 'Path Movement Finished')
     write_request(path_movement_failed, 'Path Movement Failed')
+    write_request(sequence, 'Check Sequence')
+    write_request(position, 'Check Position')
     write_request(unknown_content, 'Unknown Content')
 
     end_time = time.time()  # End timing here
