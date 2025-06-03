@@ -25,7 +25,7 @@ def parse_handle_request(content):
         params = m[3].split(', ')
         result['area'] = params[0]
         result['le'] = params[1]
-        result['force_check'] = 'null'
+        result['force_check'] = None
         if len(params) > 2:
             result['force_check'] = params[2]
 
@@ -45,21 +45,21 @@ def parse_execute_rbg(content):
     TASK_ID: 242, TASK_TYPE: LamTask CATEGORY: ON_TIME LOCKED: false POINTS: 807 TELEGRAM_TYPE: FS LAM: 1 INFO: LamTask - LAM(s)={1} SUBTASKS=[, SingleTask - LAM(s)={1} LE: 1847667, SingleTask - LAM(s)={1} LE: 1847668]
     TASK_ID: 240, TASK_TYPE: LamTask CATEGORY: ON_TIME LOCKED: true POINTS: 907 TELEGRAM_TYPE: FS LAM: 1 INFO: LamTask - LAM(s)={1} SUBTASKS=[, SingleTask - LAM(s)={1} LE: 1847717, SingleTask - LAM(s)={1} LE: 1847718] -- FAILURE: LamTask not allowed for UML transports. current LHM 1847717 [a_typ=UML] -- FAILURE: LamTask not allowed for UML transports. current LHM 1847717 [a_typ=UML]
     '''
-    pattern = re.compile(r'(.*?)TASK_ID: (\d+), TASK_TYPE: (\w+) CATEGORY: (\w+) LOCKED: (\w+) POINTS: (\d+) TELEGRAM_TYPE: (\w+) LAM: (\d+) INFO: (.+?) SUBTASKS=\[, (.*?)\]')
+    pattern = re.compile(r'(.*?)TASK_ID: (\d+), TASK_TYPE: (\w+) CATEGORY: (\w+) LOCKED: (\w+) POINTS: (\d+) TELEGRAM_TYPE: (\w+) LAM: (\d+) INFO: (.+?) SUBTASKS=\[, (.*?)\](.+)?')
     match = pattern.match(content)
     result = {}
-    stage = task_id = task_type = category = locked = points = telegram_type = lam = info = le = ''
+    stage = task_id = task_type = category = locked = points = telegram_type = lam = info = le = fail_status = None
     les = []
 
     if match:
-        stage, task_id, task_type, category, locked, points, telegram_type, lam, info, les = match.groups()
+        stage, task_id, task_type, category, locked, points, telegram_type, lam, info, les, fail_status = match.groups()
         les = les.split(', ')
     else:
-        pattern = re.compile(r'(.*?)TASK_ID: (\d+), TASK_TYPE: (\w+) CATEGORY: (\w+) LOCKED: (\w+) POINTS: (\d+) TELEGRAM_TYPE: (\w+) LAM: (\d+) INFO: (.+?) LE: (\d+)')
+        pattern = re.compile(r'(.*?)TASK_ID: (\d+), TASK_TYPE: (\w+) CATEGORY: (\w+) LOCKED: (\w+) POINTS: (\d+) TELEGRAM_TYPE: (\w+) LAM: (\d+) INFO: (.+?) LE: (\d+)(.+)?')
         match = pattern.match(content)
 
         if match:
-            stage, task_id, task_type, category, locked, points, telegram_type, lam, info, le = match.groups()
+            stage, task_id, task_type, category, locked, points, telegram_type, lam, info, le, fail_status = match.groups()
 
     if match:
         result['stage'] = stage
@@ -82,6 +82,7 @@ def parse_execute_rbg(content):
                         result['le'] = m[1]
                     else:
                         result['le'] += ', ' + m[1]
+        result['fail_status'] = fail_status
     else:
         result['stage'] = 'unknown'
         result['data'] = content
@@ -108,14 +109,14 @@ def parse_vb(content):
         if m:
             result['reserved'] = m.group(1)
             result['vbok'] = m.group(2)
-            result['moving'] = ''
-            result['info_status'] = ''
-            result['requiredStatusBit'] = ''
+            result['moving'] = None
+            result['info_status'] = None
+            result['requiredStatusBit'] = None
         else:
             m = re.match(r'isMoving=(\w+), status=(\d+), requiredStatusBit=(\d+)', vb_info)
             if m:
-                result['reserved'] = ''
-                result['vbok'] = ''
+                result['reserved'] = None
+                result['vbok'] = None
                 result['moving'] = m.group(1)
                 result['info_status'] = m.group(2)
                 result['requiredStatusBit'] = m.group(3)
@@ -283,6 +284,8 @@ def check_sequence(content):
         result['id'] = id
         result['id_status'] = id_status
         result['returned'] = returned
+    else:
+        result['sequence_status'] = ''
 
     return result
 
@@ -414,10 +417,17 @@ if __name__ == '__main__':
                                 path_movement_failed.append(parsed)
                         elif function_name == 'checkSequence':
                             parsed.update(check_sequence(content))
-                            sequence.append(parsed)
+                            if parsed['sequence_status'] != '':
+                                sequence.append(parsed)
+                            else:
+                                unknown_content.append(parsed)
                         elif function_name == 'isPositionOK':
                             parsed.update(check_position(content))
-                            position.append(parsed)
+                            if parsed['id'] != '':
+                                position.append(parsed)
+                            else:
+                                unknown_content.append(parsed)
+
                         elif function_name == 'mainLoop':
                             parsed.update(parse_alert(content))
                             if parsed['stage'] == 'Alert empfangen':
