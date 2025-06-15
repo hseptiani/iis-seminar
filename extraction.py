@@ -375,11 +375,11 @@ if __name__ == '__main__':
             for line in lines:
                 ts_match = timestamp_pattern.match(line)
                 if ts_match:
-                    timestamp, log_level, module, worker_id, function, content = ts_match.groups()
-                    function_name = function.split(".")[len(function.split("."))-1]
+                    timestamp, info_code, thread, operation_num, function, content = ts_match.groups()
+                    function_name = function.split(".")[len(function.split(".")) - 1]
 
-                    # Start every dict with timestamp, module and worker id
-                    parsed = {'timestamp': timestamp, 'module': module, 'worker_id': worker_id}
+                    # Start every dict with timestamp, info_code, thread and worker id
+                    parsed = {'timestamp': timestamp, 'info_code': info_code, 'thread': thread, 'operation_num': operation_num}
 
                     # For every function, update the parsed dict with the return
                     # and append the respective list
