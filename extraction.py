@@ -2,8 +2,12 @@ import os
 import pickle
 import re
 import csv
+import gzip
 import time
 import pandas as pd
+
+# Define timestamp pattern globally
+timestamp_pattern = re.compile(r'^\[(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (\w) ([^\s\]]+) ([^\s\]]+) ([^\]]+)\]\s*(.*)$') #it also captures '-'
 
 
 def parse_handle_request(content):
@@ -96,7 +100,9 @@ def parse_vb(content):
     id=1847583: VB not OK; result=false; info: #reserved=4, #VBOK=4
     id=1847754: VB not OK; result=false; info: isMoving=true, status=2, requiredStatusBit=4
     '''
-    pattern = re.compile(r'id=(\d+): VB ([^;]+); result=(\w+); info: (.+)')
+    # pattern = re.compile(r'id=(\d+): VB ([^;]+); result=(\w+); info: (.+)')
+    pattern = re.compile(r'id=(\d+): VB ([^;]+); result=(\w+); info:\s*(.*)')
+
     match = pattern.match(content)
     result = {}
 
@@ -328,6 +334,37 @@ def parse_path_detail(timestamp, mfs_id, paths):
 
     return result
 
+def collect_and_sort_log_lines(folder, max_files=None):
+    timestamped_lines = []
+    #timestamp_pattern = re.compile(r'^\[(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) [^\]]+\]\s*.*$')
+    timestamp_pattern = re.compile(r'^\[(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (\w) ([^\s\]]+) ([^\s\]]+) ([^\]]+)\]\s*(.*)$') #it also captures '-'
+
+    
+    files = []
+    for root, _, fs in os.walk(folder):
+        for file in fs:
+            # if file.endswith('.log') or file.endswith('.log.gz'):
+            if file.endswith('.log.gz'):
+                files.append(os.path.join(root, file))
+
+    # Optional: Debug on a subset of files
+    if max_files:
+        files = sorted(files)[:max_files]
+
+    for file_path in files:
+        open_func = gzip.open if file_path.endswith('.gz') else open
+        with open_func(file_path, 'rt', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                m = timestamp_pattern.match(line)
+                if m:
+                    timestamp = m.group(1)
+                    timestamped_lines.append((timestamp, line))
+
+    # Sort all collected lines by timestamp
+    timestamped_lines.sort(key=lambda x: x[0])
+    return [line for _, line in timestamped_lines]
+
+
 def write_request(data, function_name):
     # filename = 'result/' + function_name + '.csv'
     # with open(filename, mode='w', newline='') as file:
@@ -361,120 +398,128 @@ if __name__ == '__main__':
     telegrams_sent = []
     telegrams_unknown = []
 
+
+    """ 
     folder = "rawdata"
     for file in os.listdir(folder):
-        if file.endswith('.log'):
-            file_path = os.path.join(folder, file)
-            with open(file_path) as f:
-                lines = f.readlines()
-
-            # timestamp_pattern = re.compile(r'^\[(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (\w) (\w+) (\w+) ([^\]]+)\]\s*(.*)$')
-            timestamp_pattern = re.compile(r'^\[(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (\w) ([^\s\]]+) ([^\s\]]+) ([^\]]+)\]\s*(.*)$') #it also captures '-'
-            rbg_stage = ''
-
-            for line in lines:
-                ts_match = timestamp_pattern.match(line)
-                if ts_match:
-                    timestamp, info_code, thread, operation_num, function, content = ts_match.groups()
-                    function_name = function.split(".")[len(function.split(".")) - 1]
-
-                    # Start every dict with timestamp, info_code, thread and worker id
-                    parsed = {'timestamp': timestamp, 'info_code': info_code, 'thread': thread, 'operation_num': operation_num}
-
-                    # For every function, update the parsed dict with the return
-                    # and append the respective list
-                    try:
-                        if function_name == 'executeRbg':
-                            parsed.update(parse_execute_rbg(content))
-                            if parsed['stage'] == 'unknown':
-                                rbg_stage = content
-                            else:
-                                if parsed['stage'] == '':
-                                    parsed['stage'] = rbg_stage
-                                execute_rbg.append(parsed)
-                        elif function_name == 'handleRequest':
-                            parsed.update(parse_handle_request(content))
-
-                            if parsed['stage'] == 'START HANDLE REQUEST':
-                                start_handle_req.append(parsed)
-                            elif parsed['stage'] == 'END HANDLE REQUEST':
-                                end_handle_req.append(parsed)
-                            else:
-                                unknown_content.append(parsed)
-                        elif function_name == 'isVBOK':
-                            parsed.update(parse_vb(content))
-
-                            if parsed['id']:
-                                is_vb_ok.append(parsed)
-                            else:
-                                unknown_content.append(parsed)
-                        elif function_name == 'getPathForMovement':
-                            parsed.update(parse_path_movement(content))
-                            if parsed['search_status'] == 'finished':
-                                path_detail.extend(parse_path_detail(parsed['timestamp'], parsed['mfs_id'], parsed['paths']))
-                                path_movement_finished.append(parsed)
-                            else:
-                                path_movement_failed.append(parsed)
-                        elif function_name == 'checkSequence':
-                            parsed.update(check_sequence(content))
-                            if parsed['sequence_status'] != '':
-                                sequence.append(parsed)
-                            else:
-                                unknown_content.append(parsed)
-                        elif function_name == 'isPositionOK':
-                            parsed.update(check_position(content))
-                            if parsed['id'] != '':
-                                position.append(parsed)
-                            else:
-                                unknown_content.append(parsed)
-
-                        elif function_name == 'mainLoop':
-                            parsed.update(parse_alert(content))
-                            if parsed['stage'] == 'Alert empfangen':
-                                alerts_received.append(parsed)
-                            else:
-                                unknown_content.append(parsed)
-
-                        elif function_name == 'processAlert':
-                            parsed.update(parse_alert(content))
-                            if parsed['stage'] == 'Start Alert-Verarbeitung':
-                                alerts_processing.append(parsed)
-                            else:
-                                unknown_content.append(parsed)
-
-                        elif function_name == 'alertHandler()':
-                            parsed.update(parse_alert(content))
-                            # matches "Alert <NAME> wurde verarbeitet"
-                            if parsed['stage'].startswith('Alert') and 'wurde verarbeitet' in parsed['stage']:
-                                alerts_handled.append(parsed)
-                            else:
-                                unknown_content.append(parsed)
-
-                        # --- TELEGRAM HANDLING ---
-                        elif function_name == 'fmRbgTelDisp':
-                            parsed.update(parse_telegram(content))
-                            if parsed['stage'] == 'TelegramDispatch processed':
-                                telegrams_processed.append(parsed)
-                            else:
-                                unknown_content.append(parsed)
-
-                        elif function_name == 'send':
-                            parsed.update(parse_telegram(content))
-                            # matches "Alert <NAME> wurde gesendet"
-                            if parsed['stage'].startswith('Alert') and 'wurde gesendet' in parsed['stage']:
-                                telegrams_sent.append(parsed)
-                            else:
-                                unknown_content.append(parsed)
-
-                        else:
-                            # anything else
-                            parsed.update({'stage': function_name, 'data': content})
-                            unknown_content.append(parsed)
+            if file.endswith('.log'):
+                file_path = os.path.join(folder, file)
+                with open(file_path) as f:
+                    lines = f.readlines()
 
 
-                    except Exception as e:
-                        print(f"Error parsing function '{function_name}' at {timestamp}: {e}")
-                        exit(1)
+
+    # timestamp_pattern = re.compile(r'^\[(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (\w) (\w+) (\w+) ([^\]]+)\]\s*(.*)$')
+    timestamp_pattern = re.compile(r'^\[(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (\w) ([^\s\]]+) ([^\s\]]+) ([^\]]+)\]\s*(.*)$') #it also captures '-'
+    rbg_stage = ''
+
+    for line in lines: """
+
+    sorted_lines = collect_and_sort_log_lines("rawdata", max_files=10)  # or None for full set
+
+    for line in sorted_lines:
+        ts_match = timestamp_pattern.match(line)
+        if ts_match:
+            timestamp, info_code, thread, operation_num, function, content = ts_match.groups()
+            function_name = function.split(".")[len(function.split(".")) - 1]
+
+            # Start every dict with timestamp, info_code, thread and worker id
+            parsed = {'timestamp': timestamp, 'info_code': info_code, 'thread': thread, 'operation_num': operation_num}
+
+            # For every function, update the parsed dict with the return
+            # and append the respective list
+            try:
+                if function_name == 'executeRbg':
+                    parsed.update(parse_execute_rbg(content))
+                    if parsed['stage'] == 'unknown':
+                        rbg_stage = content
+                    else:
+                        if parsed['stage'] == '':
+                            parsed['stage'] = rbg_stage
+                        execute_rbg.append(parsed)
+                elif function_name == 'handleRequest':
+                    parsed.update(parse_handle_request(content))
+
+                    if parsed['stage'] == 'START HANDLE REQUEST':
+                        start_handle_req.append(parsed)
+                    elif parsed['stage'] == 'END HANDLE REQUEST':
+                        end_handle_req.append(parsed)
+                    else:
+                        unknown_content.append(parsed)
+                elif function_name == 'isVBOK':
+                    parsed.update(parse_vb(content))
+
+                    if parsed['id']:
+                        is_vb_ok.append(parsed)
+                    else:
+                        unknown_content.append(parsed)
+                elif function_name == 'getPathForMovement':
+                    parsed.update(parse_path_movement(content))
+                    if parsed['search_status'] == 'finished':
+                        path_detail.extend(parse_path_detail(parsed['timestamp'], parsed['mfs_id'], parsed['paths']))
+                        path_movement_finished.append(parsed)
+                    else:
+                        path_movement_failed.append(parsed)
+                elif function_name == 'checkSequence':
+                    parsed.update(check_sequence(content))
+                    if parsed['sequence_status'] != '':
+                        sequence.append(parsed)
+                    else:
+                        unknown_content.append(parsed)
+                elif function_name == 'isPositionOK':
+                    parsed.update(check_position(content))
+                    if parsed['id'] != '':
+                        position.append(parsed)
+                    else:
+                        unknown_content.append(parsed)
+
+                elif function_name == 'mainLoop':
+                    parsed.update(parse_alert(content))
+                    if parsed['stage'] == 'Alert empfangen':
+                        alerts_received.append(parsed)
+                    else:
+                        unknown_content.append(parsed)
+
+                elif function_name == 'processAlert':
+                    parsed.update(parse_alert(content))
+                    if parsed['stage'] == 'Start Alert-Verarbeitung':
+                        alerts_processing.append(parsed)
+                    else:
+                        unknown_content.append(parsed)
+
+                elif function_name == 'alertHandler()':
+                    parsed.update(parse_alert(content))
+                    # matches "Alert <NAME> wurde verarbeitet"
+                    if parsed['stage'].startswith('Alert') and 'wurde verarbeitet' in parsed['stage']:
+                        alerts_handled.append(parsed)
+                    else:
+                        unknown_content.append(parsed)
+
+                # --- TELEGRAM HANDLING ---
+                elif function_name == 'fmRbgTelDisp':
+                    parsed.update(parse_telegram(content))
+                    if parsed['stage'] == 'TelegramDispatch processed':
+                        telegrams_processed.append(parsed)
+                    else:
+                        unknown_content.append(parsed)
+
+                elif function_name == 'send':
+                    parsed.update(parse_telegram(content))
+                    # matches "Alert <NAME> wurde gesendet"
+                    if parsed['stage'].startswith('Alert') and 'wurde gesendet' in parsed['stage']:
+                        telegrams_sent.append(parsed)
+                    else:
+                        unknown_content.append(parsed)
+
+                else:
+                    # anything else
+                    parsed.update({'stage': function_name, 'data': content})
+                    unknown_content.append(parsed)
+
+
+            except Exception as e:
+                print(f"Error parsing function '{function_name}' at {timestamp}: {e}")
+                exit(1)
 
     # Write the list into pkl file
     write_request(execute_rbg, 'Execute RBG')
