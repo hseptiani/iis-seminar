@@ -1,5 +1,4 @@
 import os
-import pickle
 import re
 import gzip
 import time
@@ -353,6 +352,24 @@ def parse_path_detail(timestamp, mfs_id, paths):
 
     return result
 
+def getset_nio(content):
+    'id=1857866: send to NIO=1746 (AUSSCHLEUSEN)'
+    pattern = re.compile(r'id=(\d+): send to NIO=(\d+) (.*)')
+    match = pattern.match(content)
+    result = {}
+
+    if match:
+        id, send_to, status = match.groups()
+        result['id'] = id
+        result['send_to'] = send_to
+        result['status'] = status
+    else:
+        result['stage'] = 'unknown'
+        result['data'] = content
+
+    return result
+
+
 def collect_and_sort_log_lines(folder, max_files=None):
     timestamped_lines = []
 
@@ -387,9 +404,9 @@ def add_to_unknown(function_name, parsed):
 
 
 def write_request(data, function_name):
-    filename = 'result/' + function_name + '.pkl'
+    filename = 'result/' + function_name + '.pkl.gz'
     df = pd.DataFrame(data)  # Convert list of dicts to DataFrame
-    df.to_pickle(filename)
+    df.to_pickle(filename, compression='gzip')
 
 
 if __name__ == '__main__':
@@ -411,9 +428,10 @@ if __name__ == '__main__':
     telegrams_processed = []
     telegrams_sent = []
     telegrams_unknown = []
+    nio = []
 
-    sorted_lines = collect_and_sort_log_lines("rawdata", max_files=50)  # or None for full set
-    # sorted_lines = collect_and_sort_log_lines("rawdata")
+    # sorted_lines = collect_and_sort_log_lines("rawdata", max_files=50)  # or None for full set
+    sorted_lines = collect_and_sort_log_lines("rawdata")
 
     for line in sorted_lines:
         ts_match = timestamp_pattern.match(line)
@@ -517,6 +535,13 @@ if __name__ == '__main__':
                     else:
                         add_to_unknown(function_name, parsed)
 
+                elif function_name == 'getAndSetNioDestination':
+                    parsed.update(getset_nio(content))
+                    if parsed['id']:
+                        nio.append(parsed)
+                    else:
+                        add_to_unknown(function_name, parsed)
+
                 else:
                     # anything else
                     parsed['stage'] = function_name
@@ -544,6 +569,7 @@ if __name__ == '__main__':
     write_request(telegrams_sent, 'Telegrams Sent')
     write_request(sequence, 'Check Sequence')
     write_request(position, 'Check Position')
+    write_request(nio, 'Get Set NIO')
 
     end_time = time.time()  # End timing here
     print("Execution time:", end_time - start_time, "seconds")
