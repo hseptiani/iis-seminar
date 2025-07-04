@@ -5,7 +5,6 @@ import time
 import pandas as pd
 
 # Define timestamp pattern globally
-# timestamp_pattern = re.compile(r'^\[(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (\w) ([^\s\]]+) ([^\s\]]+) ([^\]]+)\]\s*(.*)$') #it also captures '-'
 timestamp_pattern = re.compile(r'^\[(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (\w) ([^\s\]]+) (\w+) ([^\]]+\]?)\]\s*(.*)$')
 unknown_content = []
 
@@ -27,7 +26,7 @@ def parse_handle_request(content):
         result['request'] = m[2]
         params = m[3].split(', ')
         result['area'] = params[0]
-        result['le'] = params[1]
+        result['mfs_id'] = params[1]
         result['force_check'] = None
         if len(params) > 2:
             result['force_check'] = params[2]
@@ -106,7 +105,6 @@ def parse_vb(content):
     id=1847583: VB not OK; result=false; info: #reserved=4, #VBOK=4
     id=1847754: VB not OK; result=false; info: isMoving=true, status=2, requiredStatusBit=4
     '''
-    # pattern = re.compile(r'id=(\d+): VB ([^;]+); result=(\w+); info: (.+)')
     pattern = re.compile(r'id=(\d+): VB ([^;]+); result=(\w+); info:\s*(.*)')
 
     match = pattern.match(content)
@@ -430,7 +428,8 @@ if __name__ == '__main__':
     telegrams_unknown = []
     nio = []
 
-    # sorted_lines = collect_and_sort_log_lines("rawdata", max_files=50)  # or None for full set
+    # Use max_files to debug, use None for full set
+    # sorted_lines = collect_and_sort_log_lines("rawdata", max_files=50)
     sorted_lines = collect_and_sort_log_lines("rawdata")
 
     for line in sorted_lines:
@@ -557,7 +556,7 @@ if __name__ == '__main__':
     write_request(execute_rbg, 'Execute RBG')
     write_request(start_handle_req, 'Start Handle Request')
     write_request(end_handle_req, 'End Handle Request')
-    write_request(is_vb_ok, 'IsVBOK')
+    write_request(is_vb_ok, 'Is VB OK')
     write_request(path_movement_finished, 'Path Movement Finished')
     write_request(path_detail, 'Path Movement Finished - Detail')
     write_request(path_movement_failed, 'Path Movement Failed')
