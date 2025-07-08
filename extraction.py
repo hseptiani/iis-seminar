@@ -104,6 +104,7 @@ def parse_vb(content):
     Sample content:
     id=1847583: VB not OK; result=false; info: #reserved=4, #VBOK=4
     id=1847754: VB not OK; result=false; info: isMoving=true, status=2, requiredStatusBit=4
+    id=1847014: VB not OK; result=false; info:
     '''
     pattern = re.compile(r'id=(\d+): VB ([^;]+); result=(\w+); info:\s*(.*)')
 
@@ -115,24 +116,31 @@ def parse_vb(content):
         result['id'] = vb_id
         result['vb_status'] = vb_status
         result['result'] = vb_result
-        m = re.match(r'#reserved=(\d+), #VBOK=(\d+)', vb_info)
-        if m:
-            result['reserved'] = m.group(1)
-            result['vbok'] = m.group(2)
+        if vb_info == '':
+            result['reserved'] = None
+            result['vbok'] = None
             result['moving'] = None
             result['info_status'] = None
             result['requiredStatusBit'] = None
         else:
-            m = re.match(r'isMoving=(\w+), status=(\d+), requiredStatusBit=(\d+)', vb_info)
+            m = re.match(r'#reserved=(\d+), #VBOK=(\d+)', vb_info)
             if m:
-                result['reserved'] = None
-                result['vbok'] = None
-                result['moving'] = m.group(1)
-                result['info_status'] = m.group(2)
-                result['requiredStatusBit'] = m.group(3)
+                result['reserved'] = m.group(1)
+                result['vbok'] = m.group(2)
+                result['moving'] = None
+                result['info_status'] = None
+                result['requiredStatusBit'] = None
             else:
-                result['stage'] = 'unknown'
-                result['data'] = content
+                m = re.match(r'isMoving=(\w+), status=(\d+), requiredStatusBit=(\d+)', vb_info)
+                if m:
+                    result['reserved'] = None
+                    result['vbok'] = None
+                    result['moving'] = m.group(1)
+                    result['info_status'] = m.group(2)
+                    result['requiredStatusBit'] = m.group(3)
+                else:
+                    result['stage'] = 'unknown'
+                    result['data'] = content
 
     return result
 
